@@ -80,20 +80,24 @@ Same pattern as X-integration:
 ```
 Container (agent.ts)
   → writes IPC request to /workspace/ipc/tasks/{requestId}.json
-  → polls /workspace/ipc/{group}/{platform}_results/{requestId}.json
+  → polls /workspace/ipc/{platform}_results/{requestId}.json
+    (group namespace is implicit — container's /workspace/ipc is bind-mounted
+     to the group's IPC directory on the host)
 
 Host (ipc.ts → host.ts)
-  → detects task file
+  → detects task file in {DATA_DIR}/ipc/{sourceGroup}/tasks/
   → routes by type prefix (linkedin_*, tw_*, yt_*)
   → spawns script via npx tsx scripts/{action}.ts
   → script reads stdin JSON, performs Playwright automation
   → script writes result as final stdout JSON line
-  → host writes result to IPC results directory
+  → host writes result to {DATA_DIR}/ipc/{sourceGroup}/{platform}_results/
 ```
 
 ### Integration Points
 
 #### 1. Host side: `src/ipc.ts`
+
+> **Note:** The existing X-integration SKILL.md describes a `handleXIpc` integration point, but it was never wired in. This is the first time a skill handler chain is being added to the default case. Include X-integration in the chain if it should also be activated.
 
 Add imports:
 ```typescript
@@ -140,13 +144,22 @@ COPY .claude/skills/youtube-integration/agent.ts ./src/skills/youtube-integratio
 
 Same change as X-integration — build context from project root.
 
+### Relationship with existing X-integration
+
+The existing X-integration skill provides `x_post`, `x_like`, `x_reply`, `x_retweet`, `x_quote` tools. The new twitter-content skill uses `tw_*` prefixes and adds discovery, draft-approval, and reporting — capabilities X-integration lacks. They coexist:
+
+- **X-integration (`x_*`)**: Direct actions (post, like, reply, retweet, quote) — the "do it now" tools
+- **Twitter-content (`tw_*`)**: Content strategy tools (discover, draft-reply with approval, report) — the "plan and analyze" tools
+
+The agent uses `tw_post` for content-planned posts and `tw_draft_reply`/`tw_reply` for networking. The existing `x_*` tools remain available for quick one-off actions. Both share the same browser profile (`data/twitter-browser-profile/` — twitter-content reuses X-integration's `data/x-browser-profile/` to avoid double login).
+
 ## MCP Tools
 
 ### LinkedIn
 
 | Tool | Description | Input | Output |
 |------|-------------|-------|--------|
-| `linkedin_post` | Create a LinkedIn post | `content` (max 3000) | Success/failure + post URL |
+| `linkedin_post` | Create a LinkedIn feed post | `content` (max 3000, regular posts only — not articles) | Success/failure + post URL |
 | `linkedin_discover` | Find interesting posts | `topics` (string[]), `people` (string[], optional) | Array of posts: author, content snippet, engagement, URL |
 | `linkedin_draft_comment` | Draft a comment for approval | `post_url`, `comment` | Draft preview text |
 | `linkedin_comment` | Post an approved comment | `post_url`, `comment` | Success/failure |
@@ -187,8 +200,15 @@ For commenting and replying:
 2. For each topic in `topics[]`, search and collect top ~5 posts/videos
 3. For each handle in `people[]`/`channels[]`, visit profile and grab latest ~3 items
 4. Deduplicate, sort by engagement
-5. Persist to GitHub repo as `discover/{platform}/{YYYY-MM-DD}.json`
-6. Return results to agent
+5. Return results to agent
+6. Persist to GitHub repo (non-blocking) as `discover/{platform}/{YYYY-MM-DD}.json`
+
+### Scrolling Strategy
+- **Max scroll depth**: 3 scroll iterations per search query (enough for ~15-20 results per topic)
+- **Stop condition**: stop scrolling if no new content loads after 3s wait
+- **Result extraction**: parse DOM elements after each scroll, deduplicate by URL
+- **Rate limiting**: 2-5s random delay between searches and between profile visits to avoid anti-bot detection
+- **Per-platform limits**: max 5 topics + 5 people/channels per run to keep within timeout
 
 ### Output Format (all platforms)
 ```json
@@ -268,6 +288,9 @@ export async function persistToGitHub(
 - Writes dated JSON file to appropriate path
 - If file exists for same date (discover runs multiple times), appends entries
 - Commits and pushes
+- **Non-blocking**: persistence runs after the result is returned to the agent — a failure to push does not block the tool response
+- **Error handling**: logs failures but does not surface them to the agent (data is already returned)
+- **Concurrency**: uses a file lock (`data/github-persist.lock`) to serialize git operations and prevent race conditions between concurrent discover/report runs
 
 ## Environment Variables
 
@@ -290,7 +313,8 @@ YOUTUBE_TOPICS=
 YOUTUBE_CHANNELS=
 ```
 
-- `CONTENT_DATA_REPO`: `owner/repo` format, uses existing `GITHUB_PAT`
+- `CONTENT_DATA_REPO`: `owner/repo` format, uses existing `GITHUB_PAT` (already in `.env`)
+- `GITHUB_PAT`: required for persistence — must have `repo` scope for private repo access (already present in `.env`)
 - `*_TOPICS`: comma-separated default discovery topics
 - `*_PEOPLE`/`*_CHANNELS`: comma-separated handles/channel IDs to monitor
 
@@ -306,11 +330,13 @@ All gitignored. Each platform has an independent Chrome profile for session isol
 
 ## Timeouts
 
-| Action | Timeout |
-|--------|---------|
-| Post / Comment / Reply | 120s |
-| Discover (scrolling, multiple searches) | 180s |
-| Report (analytics pages) | 180s |
+| Action | Script Timeout | Agent `maxWait` |
+|--------|---------------|-----------------|
+| Post / Comment / Reply | 120s | 150s |
+| Discover (scrolling, multiple searches) | 180s | 210s |
+| Report (analytics pages) | 180s | 210s |
+
+Agent-side `maxWait` must exceed script timeout to account for IPC overhead. Each tool's `waitForResult` call passes the appropriate `maxWait` value.
 
 ## Security
 
