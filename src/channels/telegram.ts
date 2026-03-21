@@ -1,7 +1,7 @@
 import https from 'https';
 import { Api, Bot } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, TELEGRAM_GROUP_BOTS, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -17,6 +17,30 @@ export interface TelegramChannelOpts {
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
+
+// ── JID helpers ──────────────────────────────────────────────────────
+// JID format: "tg:CHATID" or "tg:CHATID:THREADID" (for forum topics)
+
+function parseTelegramJid(jid: string): { chatId: string; threadId?: number } {
+  const withoutPrefix = jid.replace(/^tg:/, '');
+  const colonIdx = withoutPrefix.indexOf(':');
+  if (colonIdx === -1) {
+    return { chatId: withoutPrefix };
+  }
+  return {
+    chatId: withoutPrefix.slice(0, colonIdx),
+    threadId: parseInt(withoutPrefix.slice(colonIdx + 1), 10),
+  };
+}
+
+function buildTelegramJid(chatId: number | string, threadId?: number): string {
+  if (threadId !== undefined) {
+    return `tg:${chatId}:${threadId}`;
+  }
+  return `tg:${chatId}`;
+}
+
+// ── Send helper ──────────────────────────────────────────────────────
 
 /**
  * Send a message with Telegram Markdown parse mode, falling back to plain text.
@@ -41,7 +65,38 @@ async function sendTelegramMessage(
   }
 }
 
-// Bot pool for agent teams: send-only Api instances (no polling)
+// ── Per-topic send bots ──────────────────────────────────────────────
+// Send-only Api instances: one per agent folder for distinct bot identities
+
+const topicSendBots = new Map<string, Api>(); // folder → Api
+
+export async function initTopicSendBots(
+  bots: Array<{ folder: string; token: string }>,
+): Promise<void> {
+  for (const { folder, token } of bots) {
+    try {
+      const api = new Api(token);
+      const me = await api.getMe();
+      topicSendBots.set(folder, api);
+      logger.info(
+        { folder, username: me.username, id: me.id },
+        'Topic send bot initialized',
+      );
+    } catch (err) {
+      logger.error({ folder, err }, 'Failed to initialize topic send bot');
+    }
+  }
+  if (topicSendBots.size > 0) {
+    logger.info(
+      { count: topicSendBots.size },
+      'Telegram topic send bots ready',
+    );
+  }
+}
+
+// ── Bot pool for agent teams ─────────────────────────────────────────
+// Send-only Api instances (no polling) for swarm sub-agents
+
 const poolApis: Api[] = [];
 // Maps "{groupFolder}:{senderName}" → pool Api index for stable assignment
 const senderBotMap = new Map<string, number>();
@@ -75,6 +130,7 @@ export async function initBotPool(tokens: string[]): Promise<void> {
  * Assigns bots round-robin on first use; subsequent messages from the
  * same sender in the same group always use the same bot.
  * On first assignment, renames the bot to match the sender's role.
+ * Supports forum topics via thread ID in the JID.
  */
 export async function sendPoolMessage(
   chatId: string,
@@ -109,23 +165,26 @@ export async function sendPoolMessage(
 
   const api = poolApis[idx];
   try {
-    const numericId = chatId.replace(/^tg:/, '');
+    const { chatId: numericId, threadId } = parseTelegramJid(chatId);
+    const sendOpts = threadId ? { message_thread_id: threadId } : {};
     const MAX_LENGTH = 4096;
     if (text.length <= MAX_LENGTH) {
-      await api.sendMessage(numericId, text);
+      await api.sendMessage(numericId, text, sendOpts);
     } else {
       for (let i = 0; i < text.length; i += MAX_LENGTH) {
-        await api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH));
+        await api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH), sendOpts);
       }
     }
     logger.info(
-      { chatId, sender, poolIndex: idx, length: text.length },
+      { chatId, sender, poolIndex: idx, threadId, length: text.length },
       'Pool message sent',
     );
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool message');
   }
 }
+
+// ── TelegramChannel ──────────────────────────────────────────────────
 
 export class TelegramChannel implements Channel {
   name = 'telegram';
@@ -139,6 +198,21 @@ export class TelegramChannel implements Channel {
     this.opts = opts;
   }
 
+  /**
+   * Get the correct Api for sending to a JID.
+   * Looks up the registered group's folder, then checks for a dedicated
+   * topic send bot. Falls back to the main bot.
+   */
+  private getApiForJid(jid: string): Api {
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+    if (group) {
+      const sendBot = topicSendBots.get(group.folder);
+      if (sendBot) return sendBot;
+    }
+    return this.bot!.api;
+  }
+
   async connect(): Promise<void> {
     this.bot = new Bot(this.botToken, {
       client: {
@@ -146,24 +220,39 @@ export class TelegramChannel implements Channel {
       },
     });
 
-    // Command to get chat ID (useful for registration)
+    // Initialize per-topic send bots from config
+    if (TELEGRAM_GROUP_BOTS.length > 0) {
+      await initTopicSendBots(TELEGRAM_GROUP_BOTS);
+    }
+
+    // Command to get chat ID (includes thread ID for forum topics)
     this.bot.command('chatid', (ctx) => {
       const chatId = ctx.chat.id;
       const chatType = ctx.chat.type;
+      const threadId = ctx.message?.message_thread_id;
       const chatName =
         chatType === 'private'
           ? ctx.from?.first_name || 'Private'
           : (ctx.chat as any).title || 'Unknown';
 
+      const jid = buildTelegramJid(chatId, threadId);
+      const threadInfo = threadId ? `\nThread ID: ${threadId}` : '';
+
       ctx.reply(
-        `Chat ID: \`tg:${chatId}\`\nName: ${chatName}\nType: ${chatType}`,
-        { parse_mode: 'Markdown' },
+        `Chat ID: \`${jid}\`\nName: ${chatName}\nType: ${chatType}${threadInfo}`,
+        {
+          parse_mode: 'Markdown',
+          ...(threadId ? { message_thread_id: threadId } : {}),
+        },
       );
     });
 
     // Command to check bot status
     this.bot.command('ping', (ctx) => {
-      ctx.reply(`${ASSISTANT_NAME} is online.`);
+      const threadId = ctx.message?.message_thread_id;
+      ctx.reply(`${ASSISTANT_NAME} is online.`, {
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
     });
 
     // Telegram bot commands handled above — skip them in the general handler
@@ -176,7 +265,10 @@ export class TelegramChannel implements Channel {
         if (TELEGRAM_BOT_COMMANDS.has(cmd)) return;
       }
 
-      const chatJid = `tg:${ctx.chat.id}`;
+      const threadId = ctx.message.message_thread_id;
+      const chatJid = buildTelegramJid(ctx.chat.id, threadId);
+      // Also build a JID without thread for fallback lookup
+      const chatJidNoThread = `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -225,7 +317,10 @@ export class TelegramChannel implements Channel {
       );
 
       // Only deliver full message for registered groups
-      const group = this.opts.registeredGroups()[chatJid];
+      // Try thread-specific JID first, then fall back to plain chat JID
+      const group =
+        this.opts.registeredGroups()[chatJid] ||
+        this.opts.registeredGroups()[chatJidNoThread];
       if (!group) {
         logger.debug(
           { chatJid, chatName },
@@ -234,10 +329,15 @@ export class TelegramChannel implements Channel {
         return;
       }
 
+      // Use the JID that matched registration
+      const matchedJid = this.opts.registeredGroups()[chatJid]
+        ? chatJid
+        : chatJidNoThread;
+
       // Deliver message — startMessageLoop() will pick it up
-      this.opts.onMessage(chatJid, {
+      this.opts.onMessage(matchedJid, {
         id: msgId,
-        chat_jid: chatJid,
+        chat_jid: matchedJid,
         sender,
         sender_name: senderName,
         content,
@@ -246,16 +346,25 @@ export class TelegramChannel implements Channel {
       });
 
       logger.info(
-        { chatJid, chatName, sender: senderName },
+        { chatJid: matchedJid, chatName, sender: senderName, threadId },
         'Telegram message stored',
       );
     });
 
     // Handle non-text messages with placeholders so the agent knows something was sent
     const storeNonText = (ctx: any, placeholder: string) => {
-      const chatJid = `tg:${ctx.chat.id}`;
-      const group = this.opts.registeredGroups()[chatJid];
+      const threadId = ctx.message?.message_thread_id;
+      const chatJid = buildTelegramJid(ctx.chat.id, threadId);
+      const chatJidNoThread = `tg:${ctx.chat.id}`;
+
+      const group =
+        this.opts.registeredGroups()[chatJid] ||
+        this.opts.registeredGroups()[chatJidNoThread];
       if (!group) return;
+
+      const matchedJid = this.opts.registeredGroups()[chatJid]
+        ? chatJid
+        : chatJidNoThread;
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -274,9 +383,9 @@ export class TelegramChannel implements Channel {
         'telegram',
         isGroup,
       );
-      this.opts.onMessage(chatJid, {
+      this.opts.onMessage(matchedJid, {
         id: ctx.message.message_id.toString(),
-        chat_jid: chatJid,
+        chat_jid: matchedJid,
         sender: ctx.from?.id?.toString() || '',
         sender_name: senderName,
         content: `${placeholder}${caption}`,
@@ -330,22 +439,25 @@ export class TelegramChannel implements Channel {
     }
 
     try {
-      const numericId = jid.replace(/^tg:/, '');
+      const { chatId, threadId } = parseTelegramJid(jid);
+      const api = this.getApiForJid(jid);
+      const sendOpts = threadId ? { message_thread_id: threadId } : {};
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
-        await sendTelegramMessage(this.bot.api, numericId, text);
+        await sendTelegramMessage(api, chatId, text, sendOpts);
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
           await sendTelegramMessage(
-            this.bot.api,
-            numericId,
+            api,
+            chatId,
             text.slice(i, i + MAX_LENGTH),
+            sendOpts,
           );
         }
       }
-      logger.info({ jid, length: text.length }, 'Telegram message sent');
+      logger.info({ jid, threadId, length: text.length }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }
@@ -370,8 +482,10 @@ export class TelegramChannel implements Channel {
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.bot || !isTyping) return;
     try {
-      const numericId = jid.replace(/^tg:/, '');
-      await this.bot.api.sendChatAction(numericId, 'typing');
+      const { chatId, threadId } = parseTelegramJid(jid);
+      await this.bot.api.sendChatAction(chatId, 'typing', {
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
     }

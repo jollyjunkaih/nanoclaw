@@ -6,7 +6,12 @@ import { readEnvFile } from './env.js';
 // Read config values from .env (falls back to process.env).
 // Secrets (API keys, tokens) are NOT read here — they are loaded only
 // by the credential proxy (credential-proxy.ts), never exposed to containers.
-const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER']);
+const envConfig = readEnvFile([
+  'ASSISTANT_NAME',
+  'ASSISTANT_HAS_OWN_NUMBER',
+  'TELEGRAM_BOT_POOL',
+  'TELEGRAM_GROUP_BOTS',
+]);
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
@@ -72,7 +77,24 @@ export const TRIGGER_PATTERN = new RegExp(
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-export const TELEGRAM_BOT_POOL = (process.env.TELEGRAM_BOT_POOL || '')
+export const TELEGRAM_BOT_POOL = (
+  process.env.TELEGRAM_BOT_POOL || envConfig.TELEGRAM_BOT_POOL || ''
+)
   .split(',')
   .map((t) => t.trim())
   .filter(Boolean);
+
+// Per-topic/group send bots: "folder:token,folder:token,..."
+// Each entry maps a group folder to a dedicated send-only bot token
+export const TELEGRAM_GROUP_BOTS: Array<{ folder: string; token: string }> = (
+  process.env.TELEGRAM_GROUP_BOTS || envConfig.TELEGRAM_GROUP_BOTS || ''
+)
+  .split(',')
+  .map((e) => e.trim())
+  .filter(Boolean)
+  .map((entry) => {
+    const i = entry.indexOf(':');
+    if (i === -1) return null;
+    return { folder: entry.slice(0, i), token: entry.slice(i + 1) };
+  })
+  .filter((e): e is { folder: string; token: string } => e !== null);
