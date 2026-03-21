@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { runMigrations } from './schema.js';
+import { runMigrations } from './schema';
 
 const DB_PATH = process.env.TIMETRACKER_DB_PATH
   || path.join(process.env.HOME || '/tmp', '.nanoclaw', 'timetracker.db');
