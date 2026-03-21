@@ -88,17 +88,33 @@ export function getTimesheet(date: string, endDate?: string): TimeEntry[] {
   `).all(date) as TimeEntry[];
 }
 
-export function updateEntry(id: number, updates: Partial<TimeEntryInput>): void {
+const ALLOWED_COLUMNS = new Set(['activity', 'start_time', 'end_time', 'category_id', 'expected_activity']);
+
+export function updateEntry(
+  id: number,
+  updates: Partial<Pick<TimeEntry, 'activity' | 'start_time' | 'end_time' | 'category_id' | 'expected_activity'>>
+): boolean {
   const db = getDb();
-  const fields = Object.keys(updates)
-    .map((k) => `${k} = @${k}`)
-    .join(', ');
-  if (!fields) return;
-  db.prepare(`
+  const setClauses: string[] = [];
+  const values: (string | number | null)[] = [];
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined && ALLOWED_COLUMNS.has(key)) {
+      setClauses.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+
+  if (setClauses.length === 0) return false;
+
+  values.push(id);
+  const result = db.prepare(`
     UPDATE time_entries
-    SET ${fields}, updated_at = datetime('now')
-    WHERE id = @id
-  `).run({ ...updates, id });
+    SET ${setClauses.join(', ')}, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(...values);
+
+  return result.changes > 0;
 }
 
 export function deleteEntry(id: number): void {

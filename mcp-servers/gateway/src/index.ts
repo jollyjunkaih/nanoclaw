@@ -1,5 +1,11 @@
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -67,6 +73,43 @@ async function getOrSpawnClient(name: string): Promise<Client> {
   return client;
 }
 
+/**
+ * Creates a proxy Server for a backend that forwards tools/list and tools/call
+ * to the backend client via StdioClientTransport.
+ */
+function createProxyServer(name: string): Server {
+  const server = new Server(
+    { name: `gateway-${name}`, version: '1.0.0' },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const client = await getOrSpawnClient(name);
+    return client.listTools();
+  });
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const client = await getOrSpawnClient(name);
+    try {
+      return await client.callTool({
+        name: request.params.name,
+        arguments: request.params.arguments,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[gateway] Error calling ${request.params.name} on ${name}:`, message);
+      // Delete client so it respawns on next request
+      clients.delete(name);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  });
+
+  return server;
+}
+
 const app = express();
 app.use(express.json());
 
@@ -77,61 +120,52 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', backends, connected });
 });
 
-// Per-backend MCP proxy endpoints
+// Per-backend Streamable HTTP MCP endpoints.
+// Each request gets a stateless transport; the Server handles the full
+// MCP Streamable HTTP protocol (initialize, tools/list, tools/call).
 for (const name of Object.keys(BACKENDS)) {
-  app.post(`/${name}/mcp`, async (req: Request, res: Response) => {
-    const { method, params, id, jsonrpc } = req.body;
+  const mcpRoute = `/${name}/mcp`;
 
-    const jsonRpcResponse = (result: unknown) => ({
-      jsonrpc: jsonrpc || '2.0',
-      id: id ?? null,
-      result,
-    });
+  // One proxy server per backend (reused across requests)
+  const proxyServer = createProxyServer(name);
 
-    const jsonRpcError = (code: number, message: string) => ({
-      jsonrpc: jsonrpc || '2.0',
-      id: id ?? null,
-      error: { code, message },
-    });
-
+  app.post(mcpRoute, async (req: Request, res: Response) => {
     try {
-      // Handle initialize locally — no need to forward
-      if (method === 'initialize') {
-        res.json(jsonRpcResponse({
-          protocolVersion: '2024-11-05',
-          capabilities: { tools: {} },
-          serverInfo: {
-            name: `gateway-${name}`,
-            version: '1.0.0',
-          },
-        }));
-        return;
-      }
+      // Stateless transport — no session tracking needed
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
 
-      const client = await getOrSpawnClient(name);
-
-      if (method === 'tools/list') {
-        const result = await client.listTools();
-        res.json(jsonRpcResponse(result));
-        return;
-      }
-
-      if (method === 'tools/call') {
-        const { name: toolName, arguments: toolArgs } = params || {};
-        const result = await client.callTool({ name: toolName, arguments: toolArgs });
-        res.json(jsonRpcResponse(result));
-        return;
-      }
-
-      // Unsupported method
-      res.status(400).json(jsonRpcError(-32601, `Method not supported: ${method}`));
+      await proxyServer.connect(transport);
+      await transport.handleRequest(req, res, req.body);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`[gateway] Error proxying ${method} to ${name}:`, message);
-      // Delete client so it respawns on next request
+      console.error(`[gateway] Error handling ${name} request:`, message);
       clients.delete(name);
-      res.status(500).json(jsonRpcError(-32603, message));
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          id: req.body?.id ?? null,
+          error: { code: -32603, message },
+        });
+      }
     }
+  });
+
+  // GET for SSE streams — not supported in stateless mode
+  app.get(mcpRoute, (_req: Request, res: Response) => {
+    res.status(405).set('Allow', 'POST').json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'SSE streams not supported in stateless mode' },
+    });
+  });
+
+  // DELETE for session termination — not supported in stateless mode
+  app.delete(mcpRoute, (_req: Request, res: Response) => {
+    res.status(405).set('Allow', 'POST').json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Session termination not supported in stateless mode' },
+    });
   });
 }
 
