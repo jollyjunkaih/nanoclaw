@@ -247,6 +247,9 @@ function buildContainerArgs(
     `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
 
+  // MCP Gateway for host-side app integrations (Calendar, Mail, etc.)
+  args.push('-e', `MCP_GATEWAY_URL=http://${CONTAINER_HOST_GATEWAY}:3002`);
+
   // Mirror the host's auth method with a placeholder value.
   // API key mode: SDK sends x-api-key, proxy replaces with real key.
   // OAuth mode:   SDK exchanges placeholder token for temp API key,
