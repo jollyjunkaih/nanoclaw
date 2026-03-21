@@ -541,7 +541,9 @@ async function main(): Promise<void> {
   // Security approval handler: intercepts "approve/reject SEC-XXXX" messages,
   // writes token files that the in-container reviewer picks up on retry.
   function handleSecurityApproval(chatJid: string, content: string): boolean {
-    const match = content.trim().match(/^(approve|reject)\s+(SEC-[A-Z0-9]{4})\b/i);
+    const match = content
+      .trim()
+      .match(/^(approve|reject)\s+(SEC-[A-Z0-9]{4})\b/i);
     if (!match) return false;
 
     const decision = match[1].toLowerCase() as 'approve' | 'reject';
@@ -555,7 +557,10 @@ async function main(): Promise<void> {
       const pendingFile = path.join(approvalsDir, `${escalationId}.pending`);
 
       if (!fs.existsSync(pendingFile)) {
-        logger.warn({ escalationId, chatJid }, 'Security approval: no pending escalation found');
+        logger.warn(
+          { escalationId, chatJid },
+          'Security approval: no pending escalation found',
+        );
         return false;
       }
 
@@ -570,16 +575,23 @@ async function main(): Promise<void> {
       fs.writeFileSync(tokenFile, JSON.stringify(pendingData));
       fs.unlinkSync(pendingFile);
 
-      logger.info({ escalationId, decision, chatJid, group: group.name }, 'Security approval token written');
+      logger.info(
+        { escalationId, decision, chatJid, group: group.name },
+        'Security approval token written',
+      );
 
       // Acknowledge to the user so they know the token was received
-      const ack = decision === 'approve'
-        ? `✅ Approved ${escalationId} — agent will proceed.`
-        : `❌ Rejected ${escalationId} — agent action blocked.`;
+      const ack =
+        decision === 'approve'
+          ? `✅ Approved ${escalationId} — agent will proceed.`
+          : `❌ Rejected ${escalationId} — agent action blocked.`;
       const ch = findChannel(channels, chatJid);
       if (ch) ch.sendMessage(chatJid, ack).catch(() => {});
     } catch (err) {
-      logger.error({ err, escalationId }, 'Failed to write security approval token');
+      logger.error(
+        { err, escalationId },
+        'Failed to write security approval token',
+      );
     }
 
     return true; // suppress — don't forward "approve SEC-XXXX" to the agent
