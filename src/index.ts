@@ -45,7 +45,7 @@ import {
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { resolveGroupFolderPath } from './group-folder.js';
+import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
@@ -538,11 +538,62 @@ async function main(): Promise<void> {
     }
   }
 
+  // Security approval handler: intercepts "approve/reject SEC-XXXX" messages,
+  // writes token files that the in-container reviewer picks up on retry.
+  function handleSecurityApproval(chatJid: string, content: string): boolean {
+    const match = content.trim().match(/^(approve|reject)\s+(SEC-[A-Z0-9]{4})\b/i);
+    if (!match) return false;
+
+    const decision = match[1].toLowerCase() as 'approve' | 'reject';
+    const escalationId = match[2].toUpperCase();
+    const group = registeredGroups[chatJid];
+    if (!group) return false;
+
+    try {
+      const groupIpcDir = resolveGroupIpcPath(group.folder);
+      const approvalsDir = path.join(groupIpcDir, 'approvals');
+      const pendingFile = path.join(approvalsDir, `${escalationId}.pending`);
+
+      if (!fs.existsSync(pendingFile)) {
+        logger.warn({ escalationId, chatJid }, 'Security approval: no pending escalation found');
+        return false;
+      }
+
+      const pendingData = JSON.parse(fs.readFileSync(pendingFile, 'utf-8')) as {
+        toolName: string;
+        input: unknown;
+        timestamp: string;
+      };
+
+      const ext = decision === 'approve' ? 'approved' : 'rejected';
+      const tokenFile = path.join(approvalsDir, `${escalationId}.${ext}`);
+      fs.writeFileSync(tokenFile, JSON.stringify(pendingData));
+      fs.unlinkSync(pendingFile);
+
+      logger.info({ escalationId, decision, chatJid, group: group.name }, 'Security approval token written');
+
+      // Acknowledge to the user so they know the token was received
+      const ack = decision === 'approve'
+        ? `✅ Approved ${escalationId} — agent will proceed.`
+        : `❌ Rejected ${escalationId} — agent action blocked.`;
+      const ch = findChannel(channels, chatJid);
+      if (ch) ch.sendMessage(chatJid, ack).catch(() => {});
+    } catch (err) {
+      logger.error({ err, escalationId }, 'Failed to write security approval token');
+    }
+
+    return true; // suppress — don't forward "approve SEC-XXXX" to the agent
+  }
+
   // Channel callbacks (shared by all channels)
   const channelOpts = {
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
+
+      // Security approvals — write token file and suppress the message
+      if (!msg.is_from_me && handleSecurityApproval(chatJid, trimmed)) return;
+
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
         handleRemoteControl(trimmed, chatJid, msg).catch((err) =>
           logger.error({ err, chatJid }, 'Remote control command error'),

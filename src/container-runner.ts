@@ -199,6 +199,26 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Security policy file (read-only — agent cannot modify the rules it's judged by)
+  const policyFile = path.join(projectRoot, 'config', 'security-policy.md');
+  if (fs.existsSync(policyFile)) {
+    mounts.push({
+      hostPath: policyFile,
+      containerPath: '/workspace/security-policy.md',
+      readonly: true,
+    });
+  }
+
+  // Approvals directory — host writes .approved/.rejected tokens here,
+  // security reviewer reads and consumes them on tool-call retry
+  const approvalsDir = path.join(groupIpcDir, 'approvals');
+  fs.mkdirSync(approvalsDir, { recursive: true });
+  mounts.push({
+    hostPath: approvalsDir,
+    containerPath: '/workspace/ipc/approvals',
+    readonly: false,
+  });
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
