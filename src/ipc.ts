@@ -465,7 +465,30 @@ export async function processTaskIpc(
       }
       break;
 
-    default:
-      logger.warn({ type: data.type }, 'Unknown IPC task type');
+    default: {
+      // Dynamic imports avoid TypeScript rootDir restriction for skills outside src/
+      const skillsRoot = path.join(process.cwd(), '.claude', 'skills');
+      type IpcHandler = (data: Record<string, unknown>, sourceGroup: string, isMain: boolean, dataDir: string) => Promise<boolean>;
+      const handlers: Array<{ mod: string; fn: string }> = [
+        { mod: path.join(skillsRoot, 'x-integration', 'host.js'), fn: 'handleXIpc' },
+        { mod: path.join(skillsRoot, 'linkedin-integration', 'host.js'), fn: 'handleLinkedInIpc' },
+        { mod: path.join(skillsRoot, 'twitter-content', 'host.js'), fn: 'handleTwitterContentIpc' },
+        { mod: path.join(skillsRoot, 'youtube-integration', 'host.js'), fn: 'handleYouTubeIpc' },
+      ];
+      let handled = false;
+      for (const { mod, fn } of handlers) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const m = await import(mod) as Record<string, IpcHandler>;
+          if (typeof m[fn] === 'function') {
+            handled = await m[fn](data, sourceGroup, isMain, DATA_DIR);
+            if (handled) break;
+          }
+        } catch { /* skill not installed */ }
+      }
+      if (!handled) {
+        logger.warn({ type: data.type }, 'Unknown IPC task type');
+      }
+    }
   }
 }
