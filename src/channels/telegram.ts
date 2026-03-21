@@ -1,7 +1,11 @@
 import https from 'https';
 import { Api, Bot } from 'grammy';
 
-import { ASSISTANT_NAME, TELEGRAM_GROUP_BOTS, TRIGGER_PATTERN } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  TELEGRAM_GROUP_BOTS,
+  TRIGGER_PATTERN,
+} from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -172,7 +176,11 @@ export async function sendPoolMessage(
       await api.sendMessage(numericId, text, sendOpts);
     } else {
       for (let i = 0; i < text.length; i += MAX_LENGTH) {
-        await api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH), sendOpts);
+        await api.sendMessage(
+          numericId,
+          text.slice(i, i + MAX_LENGTH),
+          sendOpts,
+        );
       }
     }
     logger.info(
@@ -457,7 +465,10 @@ export class TelegramChannel implements Channel {
           );
         }
       }
-      logger.info({ jid, threadId, length: text.length }, 'Telegram message sent');
+      logger.info(
+        { jid, threadId, length: text.length },
+        'Telegram message sent',
+      );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }

@@ -78,7 +78,9 @@ export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export const TELEGRAM_BOT_POOL = (
-  process.env.TELEGRAM_BOT_POOL || envConfig.TELEGRAM_BOT_POOL || ''
+  process.env.TELEGRAM_BOT_POOL ||
+  envConfig.TELEGRAM_BOT_POOL ||
+  ''
 )
   .split(',')
   .map((t) => t.trim())
@@ -87,7 +89,9 @@ export const TELEGRAM_BOT_POOL = (
 // Per-topic/group send bots: "folder:token,folder:token,..."
 // Each entry maps a group folder to a dedicated send-only bot token
 export const TELEGRAM_GROUP_BOTS: Array<{ folder: string; token: string }> = (
-  process.env.TELEGRAM_GROUP_BOTS || envConfig.TELEGRAM_GROUP_BOTS || ''
+  process.env.TELEGRAM_GROUP_BOTS ||
+  envConfig.TELEGRAM_GROUP_BOTS ||
+  ''
 )
   .split(',')
   .map((e) => e.trim())
