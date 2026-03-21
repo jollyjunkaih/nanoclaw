@@ -28,14 +28,15 @@ Three independent skills, each following the X-integration IPC pattern:
 ```
 .claude/skills/linkedin-integration/
 ├── SKILL.md
-├── agent.ts              # MCP tools: linkedin_post, linkedin_discover, linkedin_draft_comment, linkedin_comment, linkedin_report
+├── agent.ts              # MCP tools: linkedin_post, linkedin_article, linkedin_discover, linkedin_draft_comment, linkedin_comment, linkedin_report
 ├── host.ts               # IPC handler for linkedin_* types
 ├── lib/
 │   ├── config.ts         # Paths, timeouts, 3000-char post limit
 │   └── browser.ts        # Playwright helpers + persistent Chrome profile
 └── scripts/
     ├── setup.ts          # Interactive LinkedIn login
-    ├── post.ts           # Create a post
+    ├── post.ts           # Create a feed post
+    ├── article.ts        # Publish a LinkedIn article
     ├── discover.ts       # Search topics + monitored people
     ├── draft-comment.ts  # Navigate to post, return draft for approval
     ├── comment.ts        # Post approved comment
@@ -159,7 +160,8 @@ The agent uses `tw_post` for content-planned posts and `tw_draft_reply`/`tw_repl
 
 | Tool | Description | Input | Output |
 |------|-------------|-------|--------|
-| `linkedin_post` | Create a LinkedIn feed post | `content` (max 3000, regular posts only — not articles) | Success/failure + post URL |
+| `linkedin_post` | Create a LinkedIn feed post | `content` (max 3000) | Success/failure + post URL |
+| `linkedin_article` | Publish a LinkedIn article | `title`, `content` (HTML/markdown body, no hard limit) | Success/failure + article URL |
 | `linkedin_discover` | Find interesting posts | `topics` (string[]), `people` (string[], optional) | Array of posts: author, content snippet, engagement, URL |
 | `linkedin_draft_comment` | Draft a comment for approval | `post_url`, `comment` | Draft preview text |
 | `linkedin_comment` | Post an approved comment | `post_url`, `comment` | Success/failure |
@@ -192,6 +194,10 @@ For commenting and replying:
 4. User approves or edits
 5. Agent calls `linkedin_comment` or `tw_reply` with final text
 6. Script navigates to post and submits the comment
+
+### LinkedIn Articles
+
+`linkedin_article` navigates to linkedin.com/article/new, fills the title field, then pastes the body content into the rich text editor. The `content` field accepts plain text or markdown which the script converts to the editor's format. Articles have no hard character limit. The script timeout is 120s (same as posts).
 
 ## Discovery
 
