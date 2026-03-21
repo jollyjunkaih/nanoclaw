@@ -6,7 +6,7 @@
   <string>com.nanoclaw.mcp-gateway</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/node</string>
+    <string>__NODE_PATH__</string>
     <string>__NANOCLAW_DIR__/mcp-servers/gateway/dist/index.js</string>
   </array>
   <key>WorkingDirectory</key>
@@ -24,7 +24,7 @@
     <key>MCP_GATEWAY_PORT</key>
     <string>3002</string>
     <key>PATH</key>
-    <string>/usr/local/bin:/usr/bin:/bin</string>
+    <string>__NODE_DIR__:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>
