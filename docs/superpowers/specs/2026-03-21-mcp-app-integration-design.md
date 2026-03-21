@@ -25,7 +25,7 @@ Add MCP servers to NanoClaw that give the container agent direct access to macOS
 │  │  Claude Agent (SDK)                       │  │
 │  │  - mcp__nanoclaw__* (existing, stdio)     │  │
 │  │  - mcp__calendar__*  ─┐                   │  │
-│  │  - mcp__mail__*       ├─ via SSE gateway  │  │
+│  │  - mcp__mail__*       ├─ via HTTP gateway │  │
 │  │  - mcp__structured__* │                   │  │
 │  │  - mcp__timetracker__*┘                   │  │
 │  └──────────────┬────────────────────────────┘  │
@@ -37,7 +37,7 @@ Add MCP servers to NanoClaw that give the container agent direct access to macOS
 │                 ▼                                │
 │  ┌──────────────────────┐                       │
 │  │  MCP Gateway :3002   │                       │
-│  │  (SSE transport)     │                       │
+│  │  (Streamable HTTP)   │                       │
 │  └──┬───┬───┬───┬───────┘                       │
 │     │   │   │   │                               │
 │  ┌──▼┐┌─▼─┐┌▼──┐┌▼────────────┐                │
@@ -53,7 +53,7 @@ Add MCP servers to NanoClaw that give the container agent direct access to macOS
 ### Key Decisions
 
 - **Separate MCP servers per app** — independent development, testing, and failure isolation
-- **Single MCP Gateway** on port 3002 provides SSE transport to the container agent, fans out to backend MCP servers via stdio
+- **Single MCP Gateway** on port 3002 exposes separate Streamable HTTP endpoints per MCP server (e.g., `/calendar`, `/mail`), each managing its own stdio backend process
 - **Container agent** connects to the gateway alongside the existing stdio-based `nanoclaw` MCP server
 - **Structured** uses Apple Shortcuts CLI (`shortcuts run`) under the hood since it has no direct API
 - **Time tracker** is a Next.js app (shadcn/ui + Tailwind + TypeScript) with SQLite, serving both the web UI and the MCP server
@@ -107,7 +107,7 @@ Add MCP servers to NanoClaw that give the container agent direct access to macOS
 | `add_task` | `title: string`, `start_time?: string`, `duration?: number` | Success boolean |
 | `complete_task` | `task_id: string` | Success boolean |
 
-*Note: Tool set is constrained by Structured's available Shortcuts actions. Will be refined during implementation based on what actions are actually exposed.*
+*Note: Tool set is constrained by Structured's available Shortcuts actions. During implementation, validate available actions by running `shortcuts list` and inspecting Structured's entries. If Structured's Shortcuts support is limited (e.g., no read access to individual tasks), fallback options include: reading Structured's data files directly, or making the integration read-only (schedule display only). The tool set above is aspirational and will be scoped down to what is actually possible.*
 
 ### 4. Time Tracker MCP Server
 
@@ -154,7 +154,21 @@ CREATE TABLE time_entries (
 );
 
 CREATE INDEX idx_entries_date ON time_entries(date);
+
+-- Prevent invalid entries
+CHECK (end_time > start_time) -- on time_entries table
 ```
+
+### SQLite Concurrency
+
+The database is shared between the Next.js web app and the MCP server (separate processes). To handle concurrent writes:
+- Enable WAL mode: `PRAGMA journal_mode=WAL`
+- Set busy timeout: `PRAGMA busy_timeout=5000`
+- Both processes must configure these pragmas on connection open
+
+### Schema Migrations
+
+Simple version-based migrations: a `schema_version` table tracks the current version. On startup, both the web app and MCP server check the version and apply sequential migration SQL files if needed.
 
 ### Pages
 
@@ -174,18 +188,29 @@ CREATE INDEX idx_entries_date ON time_entries(date);
 ## MCP Gateway
 
 **Port:** 3002
-**Transport:** SSE (server-sent events) inbound from container, stdio outbound to MCP servers
+**Transport:** Streamable HTTP inbound from container, stdio outbound to MCP servers
 
-The gateway:
-1. Accepts SSE connections from the container agent
-2. Receives tool call requests
-3. Routes to the correct backend MCP server based on tool namespace prefix
-4. Spawns backend MCP servers as child processes (stdio transport)
-5. Returns results over SSE
+The gateway exposes separate HTTP endpoints per MCP server. Each endpoint acts as an independent MCP transport that spawns and manages its own stdio backend process. There is no namespace-based routing — the Claude Agent SDK connects to each endpoint as a separate MCP server.
+
+### Endpoints
+
+| Path | Backend |
+|------|---------|
+| `/calendar` | Apple Calendar MCP (stdio) |
+| `/mail` | Apple Mail MCP (stdio) |
+| `/structured` | Structured MCP (stdio) |
+| `/timetracker` | Time Tracker MCP (stdio) |
+
+### Backend Process Management
+
+Each endpoint:
+1. Lazy-spawns its stdio backend on first connection (avoids idle processes)
+2. Keeps the process alive for subsequent requests
+3. Restarts crashed processes automatically on next request
+4. Sets a 30-second timeout on individual tool calls (JXA `osascript` can hang on permission dialogs)
+5. Returns structured MCP errors when a backend is unavailable or times out
 
 ### Server Registry
-
-The gateway maintains a mapping of namespace → MCP server command:
 
 ```json
 {
@@ -200,7 +225,9 @@ The gateway maintains a mapping of namespace → MCP server command:
 
 ### Agent Runner Changes
 
-In `container/agent-runner/src/index.ts`, add the gateway as an additional MCP server:
+In `container/agent-runner/src/index.ts`, add the gateway MCP servers.
+
+**Important:** The Claude Agent SDK's `mcpServers` config shape must be verified during implementation. If the SDK supports remote transports (Streamable HTTP / URL-based), configure directly:
 
 ```typescript
 mcpServers: {
@@ -208,21 +235,30 @@ mcpServers: {
     // existing stdio MCP server (unchanged)
   },
   calendar: {
-    type: 'sse',
+    type: 'url',
     url: `http://${CONTAINER_HOST_GATEWAY}:3002/calendar`
   },
   mail: {
-    type: 'sse',
+    type: 'url',
     url: `http://${CONTAINER_HOST_GATEWAY}:3002/mail`
   },
   structured: {
-    type: 'sse',
+    type: 'url',
     url: `http://${CONTAINER_HOST_GATEWAY}:3002/structured`
   },
   timetracker: {
-    type: 'sse',
+    type: 'url',
     url: `http://${CONTAINER_HOST_GATEWAY}:3002/timetracker`
   }
+}
+```
+
+**Fallback if SDK only supports stdio:** Create a thin stdio-to-HTTP bridge script inside the container. Each MCP server entry spawns this bridge with the target URL as an argument. The bridge translates stdio MCP protocol to HTTP requests to the gateway:
+
+```typescript
+calendar: {
+  command: 'node',
+  args: ['/app/mcp-http-bridge.js', `http://${CONTAINER_HOST_GATEWAY}:3002/calendar`]
 }
 ```
 
@@ -233,22 +269,36 @@ The `allowedTools` pattern in the agent runner already supports wildcards. Add:
 
 ## Hourly Check-in Flow
 
-Implemented as a NanoClaw scheduled task (cron: `0 * * * *`):
+Implemented as a NanoClaw scheduled task (cron: `0 * * * *`). Uses `context_mode: 'group'` so the agent has conversation history.
 
-1. **Trigger:** Task scheduler fires the cron job
-2. **Fetch schedule:** Agent calls `mcp__structured__get_tasks` for the previous hour
-3. **Send check-in:** Agent sends Telegram message:
+### State Machine
+
+The check-in is a two-phase process across separate agent invocations:
+
+**Phase 1 — Scheduled task fires (top of hour):**
+1. Agent calls `mcp__structured__get_tasks` for the previous hour
+2. Agent sends Telegram message:
    > "It's 2pm. According to Structured, you had 'Design review' scheduled 1-2pm. Did you spend your time on that, or something else?"
-4. **Receive response:** User replies via Telegram
-5. **Log time:** Agent calls `mcp__timetracker__log_time` with the user's response and the expected activity from Structured
-6. **End of day (6pm or configurable):** Agent calls `mcp__timetracker__get_daily_report` and sends a summary comparing planned vs actual
+3. Container exits
+
+**Phase 2 — User replies (triggers new agent invocation):**
+1. User's reply arrives as a normal Telegram message
+2. New agent session starts with group conversation history (includes the check-in question)
+3. Agent recognizes the reply is answering a check-in
+4. Agent calls `mcp__timetracker__log_time` with the response and expected activity
+5. Container exits
+
+**Edge cases:**
+- **No reply:** If the user doesn't reply before the next hourly check-in, the new check-in covers the current hour only. Unreplied hours are not logged (gaps are visible in reports). The agent should note the gap: "I notice the 1-2pm slot wasn't logged."
+- **Late reply:** If the user replies to a check-in after the next one has fired, the agent logs it for the correct hour based on conversation context.
+- **End of day (6pm or configurable):** A separate scheduled task calls `mcp__timetracker__get_daily_report` and sends a summary comparing planned vs actual. Notes any unlogged hours.
 
 ## Project Structure
 
 ```
 nanoclaw/
 ├── mcp-servers/
-│   ├── gateway/                -- MCP Gateway (SSE → stdio fanout)
+│   ├── gateway/                -- MCP Gateway (Streamable HTTP → stdio fanout)
 │   │   ├── src/
 │   │   │   └── index.ts
 │   │   ├── package.json
@@ -297,10 +347,6 @@ Individual launchd plists for each service:
 | Time Tracker Web | `com.nanoclaw.timetracker.plist` | 3003 |
 
 Calendar, Mail, Structured, and Time Tracker MCP servers are spawned as child processes by the gateway (not independent daemons).
-
-## WhatsApp Removal
-
-As a separate task, remove WhatsApp from the NanoClaw installation. The user's messaging channel is Telegram only.
 
 ## Security Considerations
 
