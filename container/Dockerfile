@@ -37,13 +37,18 @@ RUN npm install -g agent-browser @anthropic-ai/claude-code
 WORKDIR /app
 
 # Copy package files first for better caching
-COPY agent-runner/package*.json ./
+COPY container/agent-runner/package*.json ./
 
 # Install dependencies
 RUN npm install
 
 # Copy source code
-COPY agent-runner/ ./
+COPY container/agent-runner/ ./
+
+# Copy content manager skill MCP tools
+COPY .claude/skills/linkedin-integration/agent.ts ./src/skills/linkedin-integration/
+COPY .claude/skills/twitter-content/agent.ts ./src/skills/twitter-content/
+COPY .claude/skills/youtube-integration/agent.ts ./src/skills/youtube-integration/
 
 # Build TypeScript
 RUN npm run build

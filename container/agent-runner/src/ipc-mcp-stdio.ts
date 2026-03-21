@@ -333,6 +333,22 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// Register content manager skill tools (COPY'd during Docker build)
+try {
+  const { registerLinkedInTools } = await import('./skills/linkedin-integration/agent.js');
+  registerLinkedInTools(server, { groupFolder, isMain });
+} catch { /* skill not installed */ }
+
+try {
+  const { registerTwitterContentTools } = await import('./skills/twitter-content/agent.js');
+  registerTwitterContentTools(server, { groupFolder, isMain });
+} catch { /* skill not installed */ }
+
+try {
+  const { registerYouTubeTools } = await import('./skills/youtube-integration/agent.js');
+  registerYouTubeTools(server, { groupFolder, isMain });
+} catch { /* skill not installed */ }
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
