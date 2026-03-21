@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nanoclaw.timetracker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NANOCLAW_DIR__/mcp-servers/timetracker/node_modules/.bin/next</string>
+    <string>start</string>
+    <string>-p</string>
+    <string>3003</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__NANOCLAW_DIR__/mcp-servers/timetracker</string>
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__NANOCLAW_DIR__/data/logs/timetracker.log</string>
+  <key>StandardErrorPath</key>
+  <string>__NANOCLAW_DIR__/data/logs/timetracker.err</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PORT</key>
+    <string>3003</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

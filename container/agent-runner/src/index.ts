@@ -390,6 +390,8 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const mcpGatewayUrl = process.env.MCP_GATEWAY_URL;
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -408,7 +410,11 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        'mcp__calendar__*',
+        'mcp__mail__*',
+        'mcp__structured__*',
+        'mcp__timetracker__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -424,6 +430,24 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...(mcpGatewayUrl ? {
+          calendar: {
+            type: 'http' as const,
+            url: `${mcpGatewayUrl}/calendar/mcp`,
+          },
+          mail: {
+            type: 'http' as const,
+            url: `${mcpGatewayUrl}/mail/mcp`,
+          },
+          structured: {
+            type: 'http' as const,
+            url: `${mcpGatewayUrl}/structured/mcp`,
+          },
+          timetracker: {
+            type: 'http' as const,
+            url: `${mcpGatewayUrl}/timetracker/mcp`,
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
