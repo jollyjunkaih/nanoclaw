@@ -411,10 +411,11 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__calendar__*',
-        'mcp__mail__*',
-        'mcp__structured__*',
-        'mcp__timetracker__*',
+        ...(containerInput.groupFolder === 'tg_personal' ? [
+          'mcp__calendar__*',
+          'mcp__mail__*',
+          'mcp__timetracker__*',
+        ] : []),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -430,7 +431,7 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
-        ...(mcpGatewayUrl ? {
+        ...(mcpGatewayUrl && containerInput.groupFolder === 'tg_personal' ? {
           calendar: {
             type: 'http' as const,
             url: `${mcpGatewayUrl}/calendar/mcp`,
@@ -438,10 +439,6 @@ async function runQuery(
           mail: {
             type: 'http' as const,
             url: `${mcpGatewayUrl}/mail/mcp`,
-          },
-          structured: {
-            type: 'http' as const,
-            url: `${mcpGatewayUrl}/structured/mcp`,
           },
           timetracker: {
             type: 'http' as const,

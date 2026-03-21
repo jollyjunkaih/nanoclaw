@@ -13,7 +13,7 @@ export function deleteEventScript(eventId: string): string {
       var events = calendars[i].events.whose({ uid: targetId })();
       if (events.length > 0) {
         cal.delete(events[0]);
-        cal.reload();
+
         found = true;
         break;
       }

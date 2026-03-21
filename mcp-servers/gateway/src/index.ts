@@ -31,11 +31,6 @@ const BACKENDS: Record<string, BackendConfig> = {
     args: [path.join(serversDir, 'mail', 'dist', 'index.js')],
     cwd: path.join(serversDir, 'mail'),
   },
-  structured: {
-    command: 'node',
-    args: [path.join(serversDir, 'structured', 'dist', 'index.js')],
-    cwd: path.join(serversDir, 'structured'),
-  },
   timetracker: {
     command: 'node',
     args: [path.join(serversDir, 'timetracker', 'dist', 'mcp', 'index.js')],
@@ -126,17 +121,16 @@ app.get('/health', (_req: Request, res: Response) => {
 for (const name of Object.keys(BACKENDS)) {
   const mcpRoute = `/${name}/mcp`;
 
-  // One proxy server per backend (reused across requests)
-  const proxyServer = createProxyServer(name);
-
   app.post(mcpRoute, async (req: Request, res: Response) => {
     try {
-      // Stateless transport — no session tracking needed
+      // Each request gets its own Server + Transport pair to avoid
+      // "Already connected to a transport" errors on concurrent requests.
+      const perRequestServer = createProxyServer(name);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
 
-      await proxyServer.connect(transport);
+      await perRequestServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

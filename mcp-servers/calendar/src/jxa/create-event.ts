@@ -39,7 +39,6 @@ export function createEventScript(
 
     var newEvent = cal.Event(props);
     targetCal.events.push(newEvent);
-    cal.reload();
 
     JSON.stringify({ id: newEvent.uid(), success: true });
   `;

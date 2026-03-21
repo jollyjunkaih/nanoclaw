@@ -36,7 +36,7 @@ export function updateEventScript(
         if (newEnd !== null) e.endDate = new Date(newEnd);
         if (newLocation !== null) e.location = newLocation;
         if (newNotes !== null) e.description = newNotes;
-        cal.reload();
+
         found = true;
         break;
       }
