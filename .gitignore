@@ -38,4 +38,10 @@ groups/global/*
 # Skills system (local per-installation state)
 .nanoclaw/
 
+# Skill build artifacts (host.ts compiled by tsc)
+.claude/skills/*/host.js
+.claude/skills/*/host.js.map
+.claude/skills/*/host.d.ts
+.claude/skills/*/host.d.ts.map
+
 agents-sdk-docs
