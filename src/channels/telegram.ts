@@ -8,6 +8,7 @@ import {
 } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
+import { processImageFromUrl } from '../image.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -402,7 +403,86 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const threadId = ctx.message?.message_thread_id;
+      const chatJid = buildTelegramJid(ctx.chat.id, threadId);
+      const chatJidNoThread = `tg:${ctx.chat.id}`;
+
+      const group =
+        this.opts.registeredGroups()[chatJid] ||
+        this.opts.registeredGroups()[chatJidNoThread];
+      if (!group) return;
+
+      const matchedJid = this.opts.registeredGroups()[chatJid]
+        ? chatJid
+        : chatJidNoThread;
+
+      const caption = ctx.message.caption || '';
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const sender = ctx.from?.id?.toString() || '';
+      const msgId = ctx.message.message_id.toString();
+
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
+
+      let imageData: string | undefined;
+      let imageMediaType: string | undefined;
+
+      try {
+        const photos = ctx.message.photo;
+        if (photos && photos.length > 0) {
+          const largest = photos[photos.length - 1];
+          const file = await ctx.api.getFile(largest.file_id);
+          if (file.file_path) {
+            const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+            const processed = await processImageFromUrl(fileUrl);
+            imageData = processed.data;
+            imageMediaType = processed.mediaType;
+            logger.info(
+              { chatJid: matchedJid, fileId: largest.file_id },
+              'Processed Telegram image',
+            );
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          { chatJid: matchedJid, err },
+          'Telegram image download failed, using placeholder',
+        );
+      }
+
+      // If image processing succeeded, pass the caption as content (image travels separately).
+      // If it failed, fall back to the [Photo] placeholder so context is not lost.
+      const content = imageData
+        ? caption
+        : caption
+          ? `[Photo] ${caption}`
+          : '[Photo]';
+
+      this.opts.onMessage(matchedJid, {
+        id: msgId,
+        chat_jid: matchedJid,
+        sender,
+        sender_name: senderName,
+        content,
+        timestamp,
+        is_from_me: false,
+        image_data: imageData,
+        image_media_type: imageMediaType,
+      });
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));

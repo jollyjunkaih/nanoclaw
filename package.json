@@ -15,7 +15,8 @@
     "prepare": "husky",
     "setup": "tsx setup/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "clean-restart": "rm -rf data/sessions/*/agent-runner-src && ./container/build.sh && launchctl kickstart -k gui/$(id -u)/com.nanoclaw"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",

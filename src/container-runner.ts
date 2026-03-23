@@ -42,7 +42,6 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   imageAttachments?: Array<{ relativePath: string; mediaType: string }>;
-
 }
 
 export interface ContainerOutput {
@@ -194,6 +193,21 @@ function buildVolumeMounts(
   );
   if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
     fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  }
+  // Copy skill agent files (from .claude/skills/*/agent.ts) into the
+  // per-group source tree so they're available when tsc runs in the container.
+  // The Dockerfile COPYs these into the image, but the bind mount of
+  // agent-runner-src over /app/src shadows them — so we must include them here.
+  const skillsRoot = path.join(projectRoot, '.claude', 'skills');
+  if (fs.existsSync(skillsRoot) && fs.existsSync(groupAgentRunnerDir)) {
+    for (const skillName of ['linkedin-integration', 'twitter-content', 'youtube-integration']) {
+      const skillAgentFile = path.join(skillsRoot, skillName, 'agent.ts');
+      if (fs.existsSync(skillAgentFile)) {
+        const destDir = path.join(groupAgentRunnerDir, 'skills', skillName);
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.cpSync(skillAgentFile, path.join(destDir, 'agent.ts'));
+      }
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,

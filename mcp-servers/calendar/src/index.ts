@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { runJxa } from './jxa.js';
+import { runJxa, runAppleScript } from './jxa.js';
 import { getCalendarsScript } from './jxa/get-calendars.js';
 import { getEventsScript } from './jxa/get-events.js';
 import { createEventScript } from './jxa/create-event.js';
@@ -37,7 +37,7 @@ server.registerTool(
     }),
   },
   async ({ date, endDate, calendarName }) => {
-    const output = await runJxa(getEventsScript(date, endDate, calendarName));
+    const output = await runAppleScript(getEventsScript(date, endDate, calendarName));
     return { content: [{ type: 'text', text: output }] };
   },
 );
@@ -105,7 +105,7 @@ server.registerTool(
     }),
   },
   async ({ date, startTime, endTime }) => {
-    const output = await runJxa(checkAvailabilityScript(date, startTime, endTime));
+    const output = await runAppleScript(checkAvailabilityScript(date, startTime, endTime));
     return { content: [{ type: 'text', text: output }] };
   },
 );

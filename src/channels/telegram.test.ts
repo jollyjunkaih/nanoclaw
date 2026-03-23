@@ -12,6 +12,12 @@ vi.mock('../env.js', () => ({ readEnvFile: vi.fn(() => ({})) }));
 vi.mock('../config.js', () => ({
   ASSISTANT_NAME: 'Andy',
   TRIGGER_PATTERN: /^@Andy\b/i,
+  TELEGRAM_GROUP_BOTS: [],
+}));
+
+// Mock image processing
+vi.mock('../image.js', () => ({
+  processImageFromUrl: vi.fn(),
 }));
 
 // Mock logger
@@ -40,6 +46,7 @@ vi.mock('grammy', () => ({
     api = {
       sendMessage: vi.fn().mockResolvedValue(undefined),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn().mockResolvedValue({ file_path: 'photos/test.jpg' }),
     };
 
     constructor(token: string) {
@@ -70,6 +77,7 @@ vi.mock('grammy', () => ({
 }));
 
 import { TelegramChannel, TelegramChannelOpts } from './telegram.js';
+import { processImageFromUrl } from '../image.js';
 
 // --- Test helpers ---
 
@@ -153,8 +161,17 @@ function createMediaCtx(overrides: {
       date: overrides.date ?? Math.floor(Date.now() / 1000),
       message_id: overrides.messageId ?? 1,
       caption: overrides.caption,
+      photo: [
+        {
+          file_id: 'file123',
+          file_unique_id: 'u1',
+          width: 800,
+          height: 600,
+        },
+      ],
       ...(overrides.extra || {}),
     },
+    api: botRef.current?.api,
     me: { username: 'andy_ai_bot' },
   };
 }
@@ -554,7 +571,11 @@ describe('TelegramChannel', () => {
   // --- Non-text messages ---
 
   describe('non-text messages', () => {
-    it('stores photo with placeholder', async () => {
+    it('stores photo with placeholder when image download fails', async () => {
+      vi.mocked(processImageFromUrl).mockRejectedValueOnce(
+        new Error('network error'),
+      );
+
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -568,7 +589,11 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('stores photo with caption', async () => {
+    it('stores photo with caption placeholder when image download fails', async () => {
+      vi.mocked(processImageFromUrl).mockRejectedValueOnce(
+        new Error('network error'),
+      );
+
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -579,6 +604,51 @@ describe('TelegramChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
         expect.objectContaining({ content: '[Photo] Look at this' }),
+      );
+    });
+
+    it('passes image_data and image_media_type when download succeeds', async () => {
+      vi.mocked(processImageFromUrl).mockResolvedValueOnce({
+        data: 'base64imagedata',
+        mediaType: 'image/jpeg',
+      });
+
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createMediaCtx({});
+      await triggerMediaMessage('message:photo', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '',
+          image_data: 'base64imagedata',
+          image_media_type: 'image/jpeg',
+        }),
+      );
+    });
+
+    it('uses caption as content (not placeholder) when image download succeeds', async () => {
+      vi.mocked(processImageFromUrl).mockResolvedValueOnce({
+        data: 'base64imagedata',
+        mediaType: 'image/jpeg',
+      });
+
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createMediaCtx({ caption: 'Check this out' });
+      await triggerMediaMessage('message:photo', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: 'Check this out',
+          image_data: 'base64imagedata',
+        }),
       );
     });
 

@@ -36,6 +36,11 @@ Single Node.js process with skill-based channel system. Channels (Telegram, Slac
 
 Run commands directly—don't tell the user to run them.
 
+**IMPORTANT**: The launchd plist uses `/Users/junkaih/Library/pnpm/node` (currently v24). Native modules like `better-sqlite3` must be compiled for that version. After `npm install` or any dependency change, always rebuild native modules:
+```bash
+PATH="/Users/junkaih/Library/pnpm:$PATH" npm rebuild better-sqlite3
+```
+
 ```bash
 npm run dev          # Run with hot reload
 npm run build        # Compile TypeScript
