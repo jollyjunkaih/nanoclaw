@@ -200,7 +200,11 @@ function buildVolumeMounts(
   // agent-runner-src over /app/src shadows them — so we must include them here.
   const skillsRoot = path.join(projectRoot, '.claude', 'skills');
   if (fs.existsSync(skillsRoot) && fs.existsSync(groupAgentRunnerDir)) {
-    for (const skillName of ['linkedin-integration', 'twitter-content', 'youtube-integration']) {
+    for (const skillName of [
+      'linkedin-integration',
+      'twitter-content',
+      'youtube-integration',
+    ]) {
       const skillAgentFile = path.join(skillsRoot, skillName, 'agent.ts');
       if (fs.existsSync(skillAgentFile)) {
         const destDir = path.join(groupAgentRunnerDir, 'skills', skillName);
