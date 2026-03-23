@@ -1,3 +1,12 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "vercel": {
+      "type": "url",
+      "url": "https://mcp.vercel.com/sse"
+    },
+    "apple-mail": {
+      "command": "/Users/junkaih/nanoclaw/mcp-servers/apple-mail-mcp/venv/bin/python3",
+      "args": ["/Users/junkaih/nanoclaw/mcp-servers/apple-mail-mcp/apple_mail_mcp.py"]
+    }
+  }
 }
